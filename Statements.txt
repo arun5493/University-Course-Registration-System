@@ -1,0 +1,193 @@
+
+SQL> create table course
+  2  (
+  3  id VARCHAR2(10),
+  4  name VARCHAR2(50) NOT NULL,
+  5  min_credit NUMERIC NOT NULL,
+  6  max_credit NUMERIC NOT NULL,
+  7  department VARCHAR2(25) NOT NULL,
+  8  course_level VARCHAR2(20) NOT NULL,
+  9  min_gpa_requirement NUMERIC,
+ 10  class_size NUMERIC NOT NULL,
+ 11  waitlist_size NUMERIC NOT NULL,
+ 12  primary key(id)
+ 13  );
+
+ 
+ 
+SQL> create table course_prerequisite
+  2  (
+  3  course_id VARCHAR2(10) NOT NULL,
+  4  prerequisite_course_id VARCHAR2(10) NOT NULL,
+	 grade VARCHAR2(2),
+  5  primary key(course_id,prerequisite_course_id),
+  6  foreign key(course_id) REFERENCES course(id),
+  7  foreign key(prerequisite_course_id) REFERENCES course(id)
+  8  );
+
+  
+  
+
+SQL> create table semester
+  2  (
+  3  name VARCHAR2(25),
+  4  add_deadline DATE NOT NULL,
+  5  drop_deadline DATE NOT NULL,
+  6  primary key(name)
+  7  );
+
+  
+
+SQL> create table offering
+  2  (
+  3  course_id VARCHAR2(10) NOT NULL,
+  4  semester_name VARCHAR2(25) NOT NULL,
+  5  location VARCHAR2(25) NOT NULL,
+  6  class_size NUMERIC NOT NULL,
+     waitlist_size NUMERIC NOT NULL,
+  7  primary key(course_id,semester_name)
+  8  ,
+  9  foreign key(course_id) REFERENCES course(id),
+ 10  foreign key(semester_name) REFERENCES semester(name)
+ 11  );
+
+ 
+ 
+SQL> create table schedule
+  2  (
+  3  course_id VARCHAR2(10) NOT NULL,
+  4  semester VARCHAR2(25) NOT NULL,
+  5  day VARCHAR2(3) NOT NULL,
+  6  start_time NUMBER(5,2) NOT NULL,
+  7  end_time NUMBER(5,2) NOT NULL,
+  8  primary key(course_id,semester,day),
+  9  foreign key(course_id) REFERENCES course(id),
+ 10  foreign key(semester) REFERENCES semester(name)
+ 11  );
+
+
+
+
+SQL> create table enforce_deadline
+  2  (
+  3  semester_name VARCHAR2(25),
+  4  admin_employee_id NUMERIC,
+  5  primary key(semester_name),
+  6  foreign key(semester_name) REFERENCES semester(name)
+  7  );
+  
+
+SQL> create table student
+  2  (
+  3  id VARCHAR2(10) NOT NULL,
+  4  department VARCHAR2(25) NOT NULL,
+  5  first_name VARCHAR2(25) NOT NULL,
+  6  last_name VARCHAR2(25) NOT NULL,
+  7  date_of_birth DATE NOT NULL,
+  8  student_level VARCHAR2(20) NOT NULL,
+  9  residency VARCHAR2(20) NOT NULL,
+ 10  gpa NUMBER(5,2) DEFAULT 0,
+ 11  phone VARCHAR2(12) NOT NULL,
+ 12  email VARCHAR2(25) NOT NULL,
+ 13  address VARCHAR2(50) NOT NULL,
+ 14  amount NUMBER(8,2) DEFAULT 0,
+	 student_username VARCHAR2(25) NOT NULL,
+	 replacement_course_id numeric,
+ 15  primary key(id)
+ 16  );
+  
+  
+SQL> create table enrollment
+  2  (
+  3  semester_name VARCHAR2(25) NOT NULL,
+  4  course_id VARCHAR2(10) NOT NULL,
+  5  student_id VARCHAR2(10) NOT NULL,
+  6  status VARCHAR2(10) NOT NULL,
+  7  list_number NUMERIC,
+  8  grade VARCHAR2(2),
+  9  primary key(course_id,student_id),
+ 10  foreign key(course_id) REFERENCES course(id),
+ 11  foreign key(student_id) REFERENCES student(id)
+ 12  );
+
+create table gpa_history
+(
+	student_id VARCHAR2(10),
+	gpa NUMBER(5,2),
+	semester_name VARCHAR2(25),
+	primary key(student_id,semester_name),
+	foreign key(student_id) REFERENCES student(id)
+);
+  
+  
+SQL> ALTER TABLE userbase
+  2  ADD CONSTRAINT type_constraint CHECK(type='admin' OR type='student');
+
+  
+
+SQL> ALTER TABLE billing
+  2  ADD CONSTRAINT student_level_constraint CHECK(student_level='graduate' OR student_level='undergraduate');
+
+  
+  
+SQL> ALTER TABLE billing
+  2  ADD CONSTRAINT residency_constraint CHECK(residency='in state' OR residency='out of state' OR residency='international');
+
+  
+  
+SQL> ALTER TABLE course
+  2  ADD CONSTRAINT course_level_constraint CHECK(course_level='undergraduate' OR course_level='graduate');
+
+  
+  
+SQL> ALTER TABLE schedule
+  2  ADD CONSTRAINT day_constraint CHECK(day='mon' OR day='tue' OR day='wed' OR day='thu' OR day='fri' OR day='sat' OR day='sun');
+
+  
+  
+SQL> alter table student
+  2  add constraint student_level_student check(student_level='undergraduate' OR student_level='graduate');
+
+  
+
+SQL> alter table student
+  2  add constraint residency_student check(residency='in state' or residency='out of state' or residency='international');
+
+  
+
+SQL> alter table student
+  2  add constraint gpa_student check(gpa>=0 and gpa<=4.33);
+
+  
+  
+SQL> alter table student
+  2  add constraint email_student check(REGEXP_LIKE(email,'^\w+(\.\w+)*+@\w+(\.\w+)+$'));
+  
+
+  
+SQL> alter table student
+  2  add constraint phone_student check(phone>999999999 and phone<10000000000);
+
+  
+
+SQL> alter table enrollment
+  2  add constraint status_enrollment check(status='enrolled' OR status='waitlisted' OR status='spperm' OR status='completed');
+
+  
+  
+SQL> alter table enrollment
+  2  add constraint grade_enrollment check(grade=NULL or grade='A+' or grade='A' or grade='A-' or grade='B+' or grade='B' or grade='B-' or grade='C+' or grade='C' or grade='C-');
+
+
+  
+SQL> alter table schedule
+  2  add constraint time_schedule check(end_time > start_time);
+
+  
+SQL> alter table schedule
+  2  add constraint hourly_schedule check(end_time <= 24 and start_time <=24);
+  
+  
+SQL> alter table course_prerequisite
+  2  add constraint grade_course_prerequisite check(grade=NULL or grade='A+' or grade='A' or grade='A-' or grade='B+' or grade='B' or grade='B-' or grade='C+' or grade='C' or grade='C-');
+

@@ -1,0 +1,352 @@
+create or replace trigger insert_check
+before insert on dummy
+for each row
+declare
+	mycount1 numeric;
+	mycount numeric;
+	mytemp numeric;
+	bill number(10,2);
+	sid varchar2(10);
+	oldstatus varchar2(10);
+	mycredits numeric;
+	rid varchar2(10);
+	mycheck numeric;
+	mylevel numeric;
+	maxcreditreturn varchar2(25);
+	mylistnumber numeric;
+	pragma autonomous_transaction;
+begin	
+	select count(*) into mycount1 from enforce_deadline where semester_name=:new.semester_name;
+	if mycount1>0 and :new.status<>'completed' then
+		RAISE_APPLICATION_ERROR(-20111,'Add/Drop deadline has been enforced for the semester.');
+	end if;
+	if :new.status='drop' then
+		select count(*) into mytemp from enrollment where student_id=:new.student_id and course_id=:new.course_id and (status='enrolled' or status='waitlisted' or status='spperm');
+		if mytemp=0 then
+			RAISE_APPLICATION_ERROR(-20111,'Student cannot drop this course');
+		end if;
+			select status into oldstatus from enrollment where student_id=:new.student_id and course_id=:new.course_id;
+			select list_number into mylistnumber from enrollment where student_id=:new.student_id and course_id=:new.course_id;
+			select credits into mycredits from enrollment where course_id=:new.course_id and student_id=:new.student_id;
+			delete from enrollment where student_id=:new.student_id and course_id=:new.course_id;
+		if oldstatus='waitlisted' then
+			update enrollment set list_number=list_number-1 where course_id=:new.course_id and semester_name=:new.semester_name and list_number>mylistnumber and status='waitlisted';
+		elsif oldstatus='enrolled' then
+			select cost into bill from billing B,student S where S.id=:new.student_id and S.student_level=B.student_level and S.residency=B.residency;
+			update student set amount=amount-(bill*mycredits) where id=:new.student_id;
+			begin
+				select student_id into sid from enrollment where course_id=:new.course_id and semester_name=:new.semester_name and status='waitlisted' and list_number=1;
+			exception
+				when NO_DATA_FOUND then
+					sid:=0;
+			end;
+			if sid<>0 then
+				delete from enrollment where student_id=sid and course_id=:new.course_id;
+				
+				max_credit_waitlist(sid,mycredits,mycheck);
+				if mycheck=1 then
+					begin
+						select replacement_course_id into rid from student where id=sid;
+					exception
+						when no_data_found then
+							select course_id into rid from enrollment where student_id=sid and status='enrolled' and semester_name=:new.semester_name and rownum=1;
+					end;
+					insert into dummy(student_id,course_id,semester_name,status,credits) values(sid,rid,:new.semester_name,'drop',3);
+				end if;
+				
+				insert into enrollment(semester_name,student_id,course_id,status,credits) values(:new.semester_name,sid,:new.course_id,'enrolled',mycredits);
+				select cost into bill from billing B,student S where S.id=sid and S.student_level=B.student_level and S.residency=B.residency;
+				update student set amount=amount+(bill*:new.credits) where id=sid;
+			end if;
+			update enrollment set list_number=list_number-1 where course_id=:new.course_id and semester_name=:new.semester_name and list_number>1 and status='waitlisted';
+		end if;
+		commit;
+	elsif :new.status<>'completed' then
+		mylevel:=0;
+		maxcreditreturn:='null';
+		amount_pending(:new.student_id,:new.semester_name);
+		course_present(:new.course_id,:new.semester_name);
+		level_check(:new.student_id,:new.course_id,mylevel);
+		already_enrolled(:new.student_id,:new.course_id);
+		max_credit_enroll(:new.student_id,:new.course_id,:new.semester_name,:new.credits,maxcreditreturn);
+		schedule_check(:new.student_id,:new.course_id,:new.semester_name);
+		prerequisite(:new.student_id,:new.course_id);
+		min_gpa(:new.student_id,:new.course_id);
+		if :new.status<>'spperm' then
+			special_permission(:new.student_id,:new.course_id,:new.semester_name,:new.credits);
+		end if;
+		course_full(:new.student_id,:new.course_id,:new.semester_name,:new.credits);
+		
+		if mylevel=0 and :new.status<>'spperm' then
+			insert into enrollment(semester_name,course_id,student_id,status,credits) values(:new.semester_name,:new.course_id,:new.student_id,'spperm',:new.credits);
+			commit;
+			RAISE_APPLICATION_ERROR(-20111,'Graduate student trying to enroll for Undergraduate course. Special Permission Requested.');
+		end if;
+		
+		if maxcreditreturn<>'null' then 
+			insert into dummy(student_id,course_id,semester_name,status,credits) values(:new.student_id,maxcreditreturn,:new.semester_name,'drop',3);
+		end if;
+		
+		delete from enrollment where student_id=:new.student_id and course_id=:new.course_id;
+		insert into enrollment(student_id,course_id,semester_name,credits,status) values(:new.student_id,:new.course_id,:new.semester_name,:new.credits,'enrolled');
+		select cost into bill from billing B,student S where S.id=:new.student_id and S.student_level=B.student_level and S.residency=B.residency;
+		update student set amount=amount+(bill*:new.credits) where id=:new.student_id;
+		commit;
+	else
+		update enrollment set status='completed',grade=:new.grade where student_id=:new.student_id and course_id=:new.course_id;
+		commit;
+		calculate_gpa(:new.student_id,:new.semester_name);
+	end if;
+	commit;
+end;
+/
+
+create or replace procedure amount_pending(sid IN varchar2,sname IN varchar2) is
+	current_amount numeric;
+	outstanding_amount numeric;
+	bill numeric;
+	pragma autonomous_transaction;
+begin
+	current_amount:=0;
+	select cost into bill from billing B,student S where S.id=sid and S.student_level=B.student_level and S.residency=B.residency;	
+	for t in (select * from enrollment where student_id=sid and semester_name=sname and status='enrolled') loop
+		current_amount:=current_amount+(bill*t.credits);
+	end loop;
+	select amount into outstanding_amount from student where id=sid;
+	if outstanding_amount>current_amount then
+		RAISE_APPLICATION_ERROR(-20111,'Outstanding amount from previous semester(s). Cannot enroll.');
+	end if;
+end;
+/
+
+create or replace procedure course_present(cid IN varchar2,sname IN varchar2) is
+	mycount numeric;
+	pragma autonomous_transaction;
+begin
+	select count(*) into mycount from offering where course_id=cid and semester_name=sname;
+	if mycount=0 then
+		RAISE_APPLICATION_ERROR(-20111,'Course not offered in current semester.');
+	end if;
+end;
+/
+
+create or replace procedure schedule_check(sid IN varchar2,cid IN varchar2,sname IN varchar2) is
+	pragma autonomous_transaction;
+begin
+	for t in (select * from schedule where course=cid and semester=sname) loop
+		for r in (select * from schedule S,enrollment E where E.student_id=sid and E.status='enrolled' and E.semester_name=sname and S.semester=sname and S.course=E.course_id and S.day_of_week=t.day_of_week) loop
+			if (t.start_time > r.start_time and t.start_time < r.end_time) or (r.start_time > t.start_time and r.start_time < t.end_time) then
+				RAISE_APPLICATION_ERROR(-20111,'Schedule clash detected. Could not enroll.');
+			end if;
+		end loop;
+	end loop;
+end;
+/
+
+create or replace procedure course_full(sid IN varchar2,cid IN varchar2,sname IN varchar2,cred IN numeric) is
+	course_enrolled numeric;
+    max_course_enrolled numeric;
+	course_waitlisted numeric;
+	waitlist_count numeric;
+	max_course_waitlisted numeric;
+	max_waitlist numeric;
+	mystatus varchar2(10);
+	pragma autonomous_transaction;
+begin
+	select count(student_id) into course_enrolled from enrollment where course_id=cid and status='enrolled' and semester_name=sname;
+	select class_size into max_course_enrolled from offering where course_id=cid and semester_name=sname;
+	select waitlist_size into max_waitlist from offering where course_id=cid and semester_name=sname;
+	select count(*) into waitlist_count from enrollment where course_id=cid and semester_name=sname and status='waitlisted';
+	if course_enrolled = max_course_enrolled and waitlist_count=0 and max_waitlist>0 then
+		delete from enrollment where semester_name=sname and student_id=sid;
+		insert into enrollment(semester_name,course_id,student_id,status,list_number,credits) values(sname,cid,sid,'waitlisted',1,cred);
+		commit;
+		RAISE_APPLICATION_ERROR(-20111,'Could not enroll. Student waitlisted');
+	elsif course_enrolled+1 > max_course_enrolled then
+		select max(list_number) into course_waitlisted from enrollment where course_id=cid and semester_name=sname;
+		select waitlist_size into max_course_waitlisted from offering where course_id=cid and semester_name=sname;
+		if course_waitlisted+1 > max_course_waitlisted or max_waitlist<=0 then
+			RAISE_APPLICATION_ERROR(-20111,'Waitlist is full. Student rejected');
+		else
+			insert into enrollment(semester_name,course_id,student_id,status,list_number,credits) values(sname,cid,sid,'waitlisted',course_waitlisted+1,cred);
+			commit;
+			RAISE_APPLICATION_ERROR(-20111,'Could not enroll. Student waitlisted');
+		end if;
+	end if;
+end;
+/
+	
+create or replace procedure level_check(sid IN varchar2,cid IN varchar2,mylevel OUT numeric) is
+	courselevel varchar2(20);
+	studentlevel varchar2(20);
+	pragma autonomous_transaction;
+begin
+	select course_level into courselevel from course where id=cid;
+	select student_level into studentlevel from student where id=sid;
+	if courselevel='graduate' and studentlevel='undergraduate' then
+		RAISE_APPLICATION_ERROR(-20111,'Student does not meet level requirement');
+	else
+		mylevel:=1;
+	end if;
+	commit;
+end;
+/
+
+
+create or replace procedure already_enrolled(sid IN varchar2,cid IN varchar2) is
+	s_name_count NUMERIC;
+	pragma autonomous_transaction;
+begin
+	select count(semester_name) into s_name_count from enrollment where student_id=sid and course_id=cid and (status='enrolled' or status='completed');
+	if s_name_count<>0 then
+		RAISE_APPLICATION_ERROR(-20111,'Student has previously enrolled in this course');
+	end if;	
+	commit;
+end;
+/
+
+create or replace procedure max_credit_enroll(sid IN varchar2,cid IN varchar2,sname IN varchar2, cred IN numeric,maxcreditreturn OUT varchar2) is
+	s_credit_total numeric;
+	max_credit_total numeric;
+	replacement_id varchar2(25);
+	mycount numeric;
+	pragma autonomous_transaction;
+begin           
+	mycount:=0;
+	select replacement_course_id into maxcreditreturn from student where id=sid;
+	if maxcreditreturn<>'null' then
+		select count(*) into mycount from enrollment where student_id=sid and course_id=maxcreditreturn and status='enrolled';
+	end if;
+	select sum(credits) into s_credit_total from enrollment where student_id=sid and status='enrolled';
+	select max_credit into max_credit_total from credit_limit C,student S where S.id=sid and C.student_level=S.student_level and C.residency=S.residency;
+	if s_credit_total + cred > max_credit_total and mycount=0 then
+		maxcreditreturn:='null';
+		RAISE_APPLICATION_ERROR(-20111,'Student cannot be enrolled for more than the maximum credit limit without a replacement course.');
+	elsif s_credit_total + cred <= max_credit_total then
+		maxcreditreturn:='null';
+	end if;
+	commit;
+end;
+/
+	
+create or replace procedure prerequisite(sid IN varchar2,cid IN varchar2) is
+	temp numeric;
+	pragma autonomous_transaction;
+begin
+	for s in (select prerequisite_course_id from course_prerequisite where course_id=cid) loop
+		select count(*) into temp from enrollment where student_id=sid and status='completed' and course_id=s.prerequisite_course_id;
+		if temp=0 then
+			RAISE_APPLICATION_ERROR(-20111,'Prerequisite not met');
+		end if;
+	end loop;
+	commit;
+end;
+/
+
+create or replace procedure min_gpa(sid IN varchar2,cid IN varchar2) is
+	gpa numeric;
+	studentgpa numeric;
+	pragma autonomous_transaction;
+begin
+	select min_gpa_requirement into gpa from course where id=cid;
+	select gpa into studentgpa from student where id=sid;
+	if studentgpa < gpa then
+		RAISE_APPLICATION_ERROR(-20111,'Minimum GPA requirement not met');
+	end if;
+	commit;
+end;
+/
+
+
+create or replace procedure special_permission(sid IN varchar2,cid IN varchar2,sname IN varchar2,cred IN numeric) is
+	spperm_variable varchar2(5);
+	pragma autonomous_transaction;
+begin
+	select special_permission into spperm_variable from course where id=cid;
+	if spperm_variable='yes' then
+		insert into enrollment(semester_name,course_id,student_id,status,credits) values(sname,cid,sid,'spperm',cred);
+		commit;
+		DBMS_OUTPUT.PUT_LINE('spperm');
+		RAISE_APPLICATION_ERROR(-20111,'Special permission required');
+	end if;
+	commit;
+end; 
+/
+
+
+create or replace procedure calculate_gpa(sid IN varchar2,sname IN varchar2) is
+	attained_credits float;
+	maximum_credits float;
+	mycount numeric;
+	pragma autonomous_transaction;
+begin
+	select sum(credits*points) into attained_credits from enrollment E,grading G where E.student_id=sid and E.status='completed' and E.grade=G.grade;
+	select sum(credits) into maximum_credits from enrollment E where E.student_id=sid and status='completed';
+	update student set gpa=attained_credits/maximum_credits where id=sid;
+	select count(*) into mycount from gpa_history where semester_name=sname and student_id=sid;
+	if mycount=0 then
+		insert into gpa_history values(sid,attained_credits/maximum_credits,sname);
+	else
+		update gpa_history set gpa=attained_credits/maximum_credits where student_id=sid and semester_name=sname;
+	end if;
+	commit;
+end;
+/
+
+
+
+
+create or replace procedure delete_pending is
+	pragma autonomous_transaction;
+begin
+	for s in (select id from student where amount>0) loop
+		delete from enrollment where student_id=s.id;
+	end loop;
+	commit;
+end;
+/
+
+
+create or replace trigger deadlines
+after insert on enforce_deadline
+for each row
+declare
+	mymin numeric;
+	credit numeric;
+	pragma autonomous_transaction;
+begin
+	delete from enrollment where status='waitlisted';
+	delete from enrollment where status='spperm';
+	for s in (select id,student_level,residency from student) loop
+		select sum(credits) into credit from enrollment E where E.student_id=s.id and E.status='enrolled';
+		select min_credit into mymin from credit_limit where student_level=s.student_level and residency=s.residency;
+		if credit<mymin then
+			delete from enrollment where student_id=s.id and status='enrolled';
+		end if;
+	end loop;
+	commit;
+end;
+/
+	for s in (select id from student where amount>0) loop
+		delete from enrollment where student_id=s.id;
+		update student set amount=0 where id=s.id;
+	end loop;
+
+
+create or replace procedure max_credit_waitlist(sid IN varchar2,cred IN numeric,mycheck OUT numeric) is
+	s_credit_total numeric;
+	max_credit_total numeric;
+	pragma autonomous_transaction;
+begin                                           
+	select sum(credits) into s_credit_total from enrollment where student_id=sid and status='enrolled';
+	select max_credit into max_credit_total from credit_limit C,student S where S.id=sid and C.student_level=S.student_level and C.residency=S.residency;
+	if s_credit_total + cred > max_credit_total then
+		mycheck:=1;
+	else
+		mycheck:=0;
+	end if;
+	commit;
+end;
+/
+
+	

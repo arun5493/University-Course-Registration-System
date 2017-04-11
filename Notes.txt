@@ -1,0 +1,43 @@
+
+Tables created - 
+1. userbase - (username,password,type) type_constraint(type='admin OR type='student')
+2. billing - (student_level,residency,cost) student_level_constraint(student_level='graduate' OR student_level='undergraduate') residency_constraint(residency='in state' OR residency='out of state' OR residency='international')
+3. credit_limit - (student_level,residency,min_credit,max_credit)
+4. grading - (grade,points)
+5. admin - (employee_id,first_name,last_name,date_of_birth,admin_username) - foreign key
+6. course - (id,name,min_credit,max_credit,department,course_level,min_gpa_requirement,special_permission) course_level_constraint(course_level='undergraduate' OR course_level='graduate') credit_constraint(min_credit<=max_credit) special_permission_constraint('yes' or'no')
+7. course_prerequisite - (course_id,prerequisite_course_id,grading) - foreign keys
+8. semester - (name,add_deadline,drop_deadline)
+9. offering(course_id,semester_name,location,class_size,waitlist_size) - foreign keys
+10. schedule(course_id,semester_name,day,start_time,end_time) - foreign keys day_constraint
+11. enforce_deadline(semester_name,admin_employee_id);
+12. faculty(course_id,semester_name,faculty_name) - foreign key
+13. student(id,department,first_name,last_name,date_of_birth,student_level,residency,gpa,phone,email,address,amount) - email,phone,residency,student_level
+14. enrollment(semester_name,course_id,student_id,status,list_number,grade,credits) - grade,status
+
+
+enrolled(semester_name,course_id,student_id,enrollment_number) - foreign keys
+waitlisted(semester_name,course_id,student_id,waitlisted_number) - foreign keys
+special_permission(semester_name,course_id,student_id) - foreign keys
+rejected(semester_name,course_id,student_id) - foreign keys
+
+
+
+
+
+Notes - 
+1. While reading input, convert all into one case
+2. Insert trigger for minimum/maxmimum credit from credit_limit
+3. Compute bill when student_enrollment changes
+4. Add meaning to check constraints
+5. GPA or course prerequisite?
+6. Regular expression for semester
+7. Billing must change when enrolled
+8. Trigger for 'a student can exist in only one of the tables for a given course'
+9. Remove display of time from all dates
+10. All tabs in prints should be matched
+11. Credit range in view course
+12. Write a procedure to calculate gpa when a grade is entered
+13. Ask Ruth about time travel
+14. Test add_course_offering()
+15. Insert grade data into course_prerequisite
